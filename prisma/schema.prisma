@@ -1,0 +1,775 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// PARTIES & LOCATIONS
+// ============================================
+
+enum OrgPartyType {
+  CUSTOMER
+  SUPPLIER
+  DOWNSTREAM
+  INTERNAL
+}
+
+enum RiskTier {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model OrgParty {
+  id            String        @id @default(cuid())
+  type          OrgPartyType
+  name          String
+  r2Scope       String?       @map("r2_scope")
+  riskTier      RiskTier?     @map("risk_tier")
+  active        Boolean       @default(true)
+  email         String?
+  phone         String?
+  address       String?
+  city          String?
+  state         String?
+  zipCode       String?       @map("zip_code")
+  country       String?
+  createdAt     DateTime      @default(now()) @map("created_at")
+  createdBy     String?       @map("created_by")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  updatedBy     String?       @map("updated_by")
+
+  // Relations
+  locations     Location[]
+  assets        Asset[]       @relation("ClientAssets")
+  intakeOrders  IntakeOrder[]
+  certifications OrgPartyCertification[]
+  downstreamApprovals DownstreamVendorApproval[]
+  userAccounts  UserAccount[]
+  materialLots  MaterialLot[]
+  salesOrders   SalesOrder[]
+
+  @@map("org_party")
+}
+
+model Location {
+  id          String    @id @default(cuid())
+  orgPartyId String    @map("org_party_id")
+  code       String
+  name       String
+  isSecure   Boolean   @default(false) @map("is_secure")
+  gpsLat     Float?    @map("gps_lat")
+  gpsLon     Float?    @map("gps_lon")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  orgParty   OrgParty  @relation(fields: [orgPartyId], references: [id], onDelete: Cascade)
+  assets     Asset[]
+  cocEventsFrom ChainOfCustodyEvent[] @relation("FromLocation")
+  cocEventsTo   ChainOfCustodyEvent[] @relation("ToLocation")
+  shipmentsFrom Shipment[] @relation("ShipmentFromLocation")
+  shipmentsTo   Shipment[] @relation("ShipmentToLocation")
+
+  @@unique([orgPartyId, code])
+  @@map("location")
+}
+
+// ============================================
+// USER ACCOUNTS
+// ============================================
+
+enum UserRole {
+  TECH
+  QA
+  AUDITOR
+  ADMIN
+}
+
+model UserAccount {
+  id         String     @id @default(cuid())
+  clerkId    String     @unique @map("clerk_id")
+  name       String
+  email      String
+  role       UserRole
+  orgPartyId String?    @map("org_party_id")
+  active     Boolean    @default(true)
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  // Relations
+  orgParty   OrgParty?  @relation(fields: [orgPartyId], references: [id])
+  workOrders WorkOrder[]
+  cocEvents  ChainOfCustodyEvent[]
+  statusHistory AssetStatusHistory[]
+  sanitizationResults SanitizationResult[]
+  testResults TestResult[]
+  ncrRaised  Nonconformance[] @relation("RaisedBy")
+  ncrAssigned Nonconformance[] @relation("AssignedTo")
+  capaActions CAPAAction[]
+  assignedAssets Asset[] @relation("AssignedAssets")
+  verifiedHardDrives HardDrive[]
+
+  @@map("user_account")
+}
+
+// ============================================
+// ASSETS & IDENTIFIERS
+// ============================================
+
+enum AssetStatus {
+  RECEIVED
+  IN_PROCESS
+  SANITIZED
+  READY_FOR_SALE
+  SCRAPPED
+  SHIPPED
+  DESTROYED
+}
+
+enum R2v3ComplianceStatus {
+  COMPLIANT
+  PENDING
+  NONCOMPLIANT
+}
+
+model Asset {
+  id              String      @id @default(cuid())
+  clientId        String      @map("client_id")
+  model           String?
+  manufacturer    String?
+  purchaseDate    DateTime?   @map("purchase_date")
+  currentStatus   AssetStatus @default(RECEIVED) @map("current_status")
+  dataBearing     Boolean     @default(false) @map("data_bearing_flag")
+  hazmat          Boolean     @default(false) @map("hazmat_flag")
+  currentLocationId String?   @map("current_location_id")
+  assignedToId    String?     @map("assigned_to_id")
+  resaleValue     Decimal?    @map("resale_value") @db.Decimal(10, 2)
+  
+  // Technical Specifications
+  processor       String?
+  ramSizeGb       Int?        @map("ram_size_gb")
+  storageType     String?     @map("storage_type") // SSD, NVME, HDD
+  storageCapacityGb Int?       @map("storage_capacity_gb")
+  screenSizeInches Float?      @map("screen_size_inches")
+  operatingSystem String?     @map("operating_system")
+  
+  // R2v3 Compliance
+  r2v3Compliance  R2v3ComplianceStatus? @map("r2v3_compliance")
+  complianceNotes String?     @map("compliance_notes") @db.Text
+  complianceSummary String?   @map("compliance_summary") @db.Text // Simple code-generated summary
+  suggestedNextAction String? @map("suggested_next_action") @db.Text // Simple code-generated suggestion
+  
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  
+  // Images: Use DocumentLink with linkType="asset" and document.type="photo"
+
+  // Relations
+  client          OrgParty    @relation("ClientAssets", fields: [clientId], references: [id])
+  currentLocation Location?   @relation(fields: [currentLocationId], references: [id])
+  identifiers     AssetIdentifier[]
+  intakeLines     IntakeLine[]
+  workOrders      WorkOrder[] @relation("AssetWorkOrders")
+  cocEvents       ChainOfCustodyEvent[]
+  statusHistory   AssetStatusHistory[]
+  sanitizationResults SanitizationResult[]
+  sanitizationActions SanitizationAction[]
+  testResults     TestResult[]
+  components      AssetComponent[]
+  hardDrives      HardDrive[]
+  shipmentItems   ShipmentItem[]
+  salesLines      SalesLine[]
+  nonconformances Nonconformance[]
+  assignedTo      UserAccount? @relation("AssignedAssets", fields: [assignedToId], references: [id])
+  // documentLinks handled via DocumentLink.linkType and linkId
+
+  @@map("asset")
+}
+
+enum IdentifierType {
+  SERIAL
+  CLIENT_TAG
+  INT_TAG
+  IMEI
+  MAC
+  UUID
+}
+
+model AssetIdentifier {
+  id       String         @id @default(cuid())
+  assetId  String         @map("asset_id")
+  idType   IdentifierType @map("id_type")
+  idValue  String         @map("id_value")
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  asset    Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([idType, idValue])
+  @@map("asset_identifier")
+}
+
+// ============================================
+// INTAKE ORDERS
+// ============================================
+
+model IntakeOrder {
+  id              String      @id @default(cuid())
+  clientId        String      @map("client_id")
+  orderNumber     String      @unique @map("order_number")
+  receivedDate    DateTime    @map("received_date")
+  packingListNum  String?     @map("packing_list_num")
+  totalWeightKg   Float?      @map("total_weight_kg")
+  notes           String?     @db.Text
+  createdAt       DateTime    @default(now()) @map("created_at")
+  createdBy       String?     @map("created_by")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  client          OrgParty    @relation(fields: [clientId], references: [id])
+  lines          IntakeLine[]
+  // documentLinks handled via DocumentLink.linkType and linkId
+
+  @@map("intake_order")
+}
+
+model IntakeLine {
+  id            String       @id @default(cuid())
+  intakeOrderId String       @map("intake_order_id")
+  assetId       String?      @map("asset_id")
+  quantity      Int          @default(1)
+  weightKg      Float?       @map("weight_kg")
+  description   String?
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  // Relations
+  intakeOrder   IntakeOrder  @relation(fields: [intakeOrderId], references: [id], onDelete: Cascade)
+  asset         Asset?       @relation(fields: [assetId], references: [id])
+
+  @@map("intake_line")
+}
+
+// ============================================
+// WORK ORDERS
+// ============================================
+
+enum WorkOrderType {
+  TEST
+  REPAIR
+  SANITIZE
+  TEARDOWN
+}
+
+model WorkOrder {
+  id          String          @id @default(cuid())
+  assetId     String          @map("asset_id")
+  woType      WorkOrderType   @map("wo_type")
+  openedAt    DateTime        @default(now()) @map("opened_at")
+  closedAt    DateTime?       @map("closed_at")
+  techId      String?         @map("tech_id")
+  notes       String?         @db.Text
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  asset       Asset           @relation("AssetWorkOrders", fields: [assetId], references: [id], onDelete: Cascade)
+  tech        UserAccount?    @relation(fields: [techId], references: [id])
+  steps       WorkOrderStep[]
+
+  @@map("work_order")
+}
+
+model WorkOrderStep {
+  id            String      @id @default(cuid())
+  workOrderId   String      @map("work_order_id")
+  sequence      Int
+  procedureCode String?     @map("procedure_code")
+  startedAt     DateTime?   @map("started_at")
+  endedAt       DateTime?   @map("ended_at")
+  passed        Boolean?
+  notes         String?     @db.Text
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  workOrder     WorkOrder   @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@map("work_order_step")
+}
+
+// ============================================
+// CHAIN OF CUSTODY
+// ============================================
+
+enum COCEventType {
+  RECEIVED
+  MOVED
+  SANITIZED
+  RELEASED
+  SHIPPED
+  DESTROYED
+}
+
+model ChainOfCustodyEvent {
+  id            String        @id @default(cuid())
+  assetId       String        @map("asset_id")
+  eventType     COCEventType  @map("event_type")
+  eventTs       DateTime      @default(now()) @map("event_ts")
+  fromLocationId String?      @map("from_location_id")
+  toLocationId  String?       @map("to_location_id")
+  performedBy   String?       @map("performed_by")
+  evidenceDocId String?       @map("evidence_doc_id")
+  signatureHash String?       @map("signature_hash")
+  notes         String?       @db.Text
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  asset         Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  fromLocation  Location?     @relation("FromLocation", fields: [fromLocationId], references: [id])
+  toLocation    Location?     @relation("ToLocation", fields: [toLocationId], references: [id])
+  performer     UserAccount?  @relation(fields: [performedBy], references: [id])
+  evidenceDoc   Document?     @relation(fields: [evidenceDocId], references: [id])
+
+  @@map("chain_of_custody_event")
+}
+
+model AssetStatusHistory {
+  id          String      @id @default(cuid())
+  assetId     String      @map("asset_id")
+  fromStatus  AssetStatus? @map("from_status")
+  toStatus    AssetStatus  @map("to_status")
+  changedTs   DateTime    @default(now()) @map("changed_ts")
+  changedBy   String?     @map("changed_by")
+  notes       String?     @db.Text
+
+  // Relations
+  asset       Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  changer     UserAccount? @relation(fields: [changedBy], references: [id])
+
+  @@map("asset_status_history")
+}
+
+// ============================================
+// SANITIZATION
+// ============================================
+
+enum SanitizationMethod {
+  BLANCO
+  NIST_800_88_CLEAR
+  NIST_800_88_PURGE
+  PHYSICAL_DESTROY
+}
+
+model SanitizationAction {
+  id          String      @id @default(cuid())
+  assetId     String      @map("asset_id")
+  method      SanitizationMethod
+  toolName    String?     @map("tool_name")
+  toolVersion String?     @map("tool_version")
+  policyRev   String?     @map("policy_rev")
+  startedAt   DateTime    @default(now()) @map("started_at")
+  endedAt     DateTime?   @map("ended_at")
+  outcome     String?     @db.Text
+  verifier    String?     @map("verifier")
+  certificateNumber String? @map("certificate_number")
+  reportDocId String?     @map("report_doc_id")
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  asset       Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  reportDoc   Document?   @relation(fields: [reportDocId], references: [id])
+
+  @@map("sanitization_action")
+}
+
+model SanitizationResult {
+  id          String      @id @default(cuid())
+  assetId     String      @map("asset_id")
+  actionId    String?     @map("action_id")
+  passed      Boolean
+  verifiedAt  DateTime?   @map("verified_at")
+  verifierId  String?     @map("verifier_id")
+  certificateNumber String? @map("certificate_number")
+  notes       String?     @db.Text
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  asset       Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  verifier    UserAccount? @relation(fields: [verifierId], references: [id])
+
+  @@map("sanitization_result")
+}
+
+// ============================================
+// TESTING
+// ============================================
+
+model TestResult {
+  id            String      @id @default(cuid())
+  assetId       String      @map("asset_id")
+  procedureCode String      @map("procedure_code")
+  metric        String?
+  value         String?
+  passFlag      Boolean     @map("pass_flag")
+  testerId      String?     @map("tester_id")
+  testTs        DateTime    @default(now()) @map("test_ts")
+  notes         String?     @db.Text
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  asset         Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  tester        UserAccount? @relation(fields: [testerId], references: [id])
+
+  @@map("test_result")
+}
+
+// ============================================
+// COMPONENTS & BOM
+// ============================================
+
+model Component {
+  id            String          @id @default(cuid())
+  category      String
+  manufacturer  String?
+  model         String?
+  specs         String?         @db.Text
+  dataBearing   Boolean         @default(false) @map("data_bearing_flag")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  assetComponents AssetComponent[]
+
+  @@map("component")
+}
+
+model AssetComponent {
+  id            String      @id @default(cuid())
+  assetId       String      @map("asset_id")
+  componentId   String      @map("component_id")
+  quantity      Int         @default(1)
+  removedAt     DateTime?   @map("removed_at")
+  notes         String?     @db.Text
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  asset         Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  component     Component   @relation(fields: [componentId], references: [id])
+
+  @@map("asset_component")
+}
+
+// ============================================
+// HARD DRIVES
+// ============================================
+
+model HardDrive {
+  id              String      @id @default(cuid())
+  assetId         String      @map("asset_id")
+  serialNumber    String      @map("serial_number")
+  capacityGb      Int?        @map("capacity_gb")
+  valueUsd        Decimal?    @map("value_usd") @db.Decimal(10, 2)
+  destructionStatus R2v3ComplianceStatus? @map("destruction_status")
+  destructionCertificate String? @map("destruction_certificate")
+  destroyedAt     DateTime?   @map("destroyed_at")
+  verifiedAt      DateTime?   @map("verified_at")
+  verifiedById    String?     @map("verified_by_id")
+  notes           String?     @db.Text
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  asset           Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  verifiedBy      UserAccount? @relation(fields: [verifiedById], references: [id])
+
+  @@unique([assetId, serialNumber])
+  @@map("hard_drive")
+}
+
+// ============================================
+// MATERIAL LOTS
+// ============================================
+
+enum MaterialStream {
+  ALUMINUM
+  COPPER
+  MIXED_PLASTICS
+  PCBS
+  STEEL
+  OTHER
+}
+
+model MaterialLot {
+  id                String            @id @default(cuid())
+  stream            MaterialStream
+  weightKg          Float             @map("weight_kg")
+  downstreamVendorId String?          @map("downstream_vendor_id")
+  shipmentId       String?           @map("shipment_id")
+  dispositionStatus String?          @map("disposition_status")
+  assayResults     String?           @map("assay_results") @db.Text
+  recoveryPercent  Float?            @map("recovery_percent")
+  cocTracking      String?           @map("coc_tracking")
+  crtTracking      String?           @map("crt_tracking")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  downstreamVendor  OrgParty?         @relation(fields: [downstreamVendorId], references: [id])
+  shipment          Shipment?         @relation(fields: [shipmentId], references: [id])
+  shipmentItems     ShipmentItem[]
+  // documentLinks handled via DocumentLink.linkType and linkId
+
+  @@map("material_lot")
+}
+
+// ============================================
+// SHIPMENTS
+// ============================================
+
+enum ShipmentDirection {
+  INBOUND
+  OUTBOUND
+}
+
+model Shipment {
+  id              String            @id @default(cuid())
+  direction       ShipmentDirection
+  carrier         String?
+  trackingNo      String?           @map("tracking_no")
+  bolNumber       String?           @map("bol_number")
+  pickupTs        DateTime?         @map("pickup_ts")
+  deliveryTs      DateTime?         @map("delivery_ts")
+  originLocationId String?          @map("origin_location_id")
+  destLocationId  String?           @map("dest_location_id")
+  manifestDocId   String?           @map("manifest_doc_id")
+  notes           String?           @db.Text
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  originLocation  Location?         @relation("ShipmentFromLocation", fields: [originLocationId], references: [id])
+  destLocation    Location?         @relation("ShipmentToLocation", fields: [destLocationId], references: [id])
+  manifestDoc     Document?         @relation(fields: [manifestDocId], references: [id])
+  items           ShipmentItem[]
+  materialLots    MaterialLot[]
+
+  @@map("shipment")
+}
+
+model ShipmentItem {
+  id            String      @id @default(cuid())
+  shipmentId    String      @map("shipment_id")
+  assetId       String?     @map("asset_id")
+  materialLotId String?     @map("material_lot_id")
+  quantity      Int         @default(1)
+  weightKg      Float?      @map("weight_kg")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  shipment      Shipment    @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  asset         Asset?      @relation(fields: [assetId], references: [id])
+  materialLot   MaterialLot? @relation(fields: [materialLotId], references: [id])
+
+  @@map("shipment_item")
+}
+
+// ============================================
+// SALES
+// ============================================
+
+model SalesOrder {
+  id            String      @id @default(cuid())
+  orderNumber   String      @unique @map("order_number")
+  customerId    String      @map("customer_id")
+  orderDate     DateTime    @default(now()) @map("order_date")
+  totalAmount   Decimal?    @map("total_amount") @db.Decimal(10, 2)
+  status        String?
+  notes         String?     @db.Text
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  customer      OrgParty    @relation(fields: [customerId], references: [id])
+  lines         SalesLine[]
+  // documentLinks handled via DocumentLink.linkType and linkId
+
+  @@map("sales_order")
+}
+
+model SalesLine {
+  id            String      @id @default(cuid())
+  salesOrderId  String      @map("sales_order_id")
+  assetId       String      @map("asset_id")
+  quantity      Int         @default(1)
+  unitPrice     Decimal?    @map("unit_price") @db.Decimal(10, 2)
+  totalPrice    Decimal?    @map("total_price") @db.Decimal(10, 2)
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  salesOrder    SalesOrder  @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  asset         Asset       @relation(fields: [assetId], references: [id])
+
+  @@map("sales_line")
+}
+
+// ============================================
+// COMPLIANCE & QUALITY
+// ============================================
+
+model Certification {
+  id          String      @id @default(cuid())
+  name        String
+  type        String      // R2v3, ISO_14001, E_STEWARDS
+  scope       String?     @db.Text
+  issuedBy    String?
+  issuedDate  DateTime?   @map("issued_date")
+  expiryDate  DateTime?   @map("expiry_date")
+  certificateNumber String? @map("certificate_number")
+  documentId  String?     @map("document_id")
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  document    Document?   @relation(fields: [documentId], references: [id])
+  orgParties  OrgPartyCertification[]
+
+  @@map("certification")
+}
+
+model OrgPartyCertification {
+  id              String        @id @default(cuid())
+  orgPartyId      String        @map("org_party_id")
+  certificationId String        @map("certification_id")
+  validFrom       DateTime      @map("valid_from")
+  validTo         DateTime?     @map("valid_to")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  orgParty        OrgParty      @relation(fields: [orgPartyId], references: [id], onDelete: Cascade)
+  certification   Certification @relation(fields: [certificationId], references: [id], onDelete: Cascade)
+
+  @@map("org_party_certification")
+}
+
+model DownstreamVendorApproval {
+  id              String        @id @default(cuid())
+  orgPartyId      String        @map("org_party_id")
+  riskTier        RiskTier
+  approvedMaterials String?     @map("approved_materials") @db.Text
+  reviewDate      DateTime      @map("review_date")
+  nextReviewDate  DateTime?     @map("next_review_date")
+  approved        Boolean       @default(true)
+  notes           String?       @db.Text
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  orgParty        OrgParty      @relation(fields: [orgPartyId], references: [id], onDelete: Cascade)
+
+  @@map("downstream_vendor_approval")
+}
+
+enum NCRSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Nonconformance {
+  id              String        @id @default(cuid())
+  raisedTs        DateTime      @default(now()) @map("raised_ts")
+  source          String        // internal_audit, customer_complaint, etc.
+  requirementRef  String?       @map("requirement_ref") // R2v3 clause
+  severity        NCRSeverity
+  assetId         String?       @map("asset_id")
+  description     String        @db.Text
+  rootCause       String?       @map("root_cause") @db.Text
+  containment     String?       @db.Text
+  raisedById      String?       @map("raised_by_id")
+  assignedToId    String?       @map("assigned_to_id")
+  status          String        @default("OPEN")
+  closedAt        DateTime?     @map("closed_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  asset           Asset?        @relation(fields: [assetId], references: [id])
+  raisedBy        UserAccount?  @relation("RaisedBy", fields: [raisedById], references: [id])
+  assignedTo      UserAccount?  @relation("AssignedTo", fields: [assignedToId], references: [id])
+  capaActions     CAPAAction[]
+  // documentLinks handled via DocumentLink.linkType and linkId
+
+  @@map("nonconformance")
+}
+
+model CAPAAction {
+  id              String        @id @default(cuid())
+  ncrId           String        @map("ncr_id")
+  actionType      String        @map("action_type") // corrective, preventive
+  description     String        @db.Text
+  ownerId         String?       @map("owner_id")
+  dueDate         DateTime?     @map("due_date")
+  completedAt     DateTime?     @map("completed_at")
+  evidence        String?       @db.Text
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  ncr             Nonconformance @relation(fields: [ncrId], references: [id], onDelete: Cascade)
+  owner           UserAccount?   @relation(fields: [ownerId], references: [id])
+
+  @@map("capa_action")
+}
+
+// ============================================
+// DOCUMENTS
+// ============================================
+
+model Document {
+  id          String      @id @default(cuid())
+  name        String
+  type        String      // manifest, coc, cod, photo, certificate, etc.
+  storagePath String      @map("storage_path") // S3/blob path
+  mimeType    String?     @map("mime_type")
+  checksum    String?
+  signed      Boolean     @default(false)
+  version     Int         @default(1)
+  uploadedAt  DateTime    @default(now()) @map("uploaded_at")
+  uploadedBy  String?     @map("uploaded_by")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  documentLinks DocumentLink[]
+  cocEvents     ChainOfCustodyEvent[]
+  shipments     Shipment[]
+  certifications Certification[]
+  sanitizationActions SanitizationAction[]
+
+  @@map("document")
+}
+
+model DocumentLink {
+  id          String      @id @default(cuid())
+  documentId  String      @map("document_id")
+  linkType    String      @map("link_type") // asset, order, shipment, ncr, etc.
+  linkId      String      @map("link_id")
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  document    Document    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  // Note: linkType and linkId are stored as strings for polymorphic relationships
+  // Back-relations are not defined as Prisma doesn't support conditional relations
+
+  @@map("document_link")
+}
